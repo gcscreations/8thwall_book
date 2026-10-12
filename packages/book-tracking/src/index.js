@@ -16,10 +16,17 @@ export function createPhysicalBookTracker({
   smoothingMs=60,
   seamCorrectionStrength=0.25,
   maxSeamGapRatio=0.12,
+  maxReacquireGapRatio=0.08,
+  minReacquireSamplesPerPage=3,
+  previewOpacity=0.55,
   surfaceOffset=0.002,
   onMetrics=()=>{},
 }={}) {
   if (!THREE || !scene || !video) throw new Error('THREE, scene and video are required')
+  if (!Number.isInteger(minReacquireSamplesPerPage) || minReacquireSamplesPerPage < 1 ||
+      !Number.isFinite(maxReacquireGapRatio) || maxReacquireGapRatio <= 0) {
+    throw new Error('Invalid reacquisition requirements')
+  }
   if (!targetNames.left || !targetNames.right || targetNames.left===targetNames.right) {
     throw new Error('Target names must be distinct')
   }
@@ -44,6 +51,7 @@ export function createPhysicalBookTracker({
     uvs.needsUpdate = true
     const material = new THREE.MeshBasicMaterial({
       map:texture, side:THREE.DoubleSide, toneMapped:false,
+      transparent:true, opacity:1,
     })
     const mesh = new THREE.Mesh(geometry,material)
     mesh.name = 'book-'+side+'-video-half'
@@ -64,14 +72,64 @@ export function createPhysicalBookTracker({
     right:makePage('right',targetNames.right),
   }
   let lastUpdateMs = null
+  let presentationState = 'ready'
+  let confirmationRequired = false
+  let reacquireSamples = {left:0,right:0}
   let metrics = {
     leftTracked:false,rightTracked:false,
     bendDegrees:null,signedBendDegrees:null,openingDegrees:null,seamGap:null,
+    seamGapRatio:null,presentationState:'ready',alignmentStatus:'unverified',
+  }
+
+  const resetPagePoses = () => {
+    for (const page of Object.values(pages)) {
+      page.active=false
+      page.root.visible=false
+      page.goalRect=null
+      page.smoothRect=null
+    }
+    reacquireSamples={left:0,right:0}
+    lastUpdateMs=null
+  }
+  // Invalidates previously acquired poses. The underlying XR8 engine still
+  // runs, but our page overlays ignore pose updates during camera changes.
+  const suspendPresentation = (reason='camera-change') => {
+    presentationState='suspended'
+    confirmationRequired=false
+    resetPagePoses()
+    for (const page of Object.values(pages)) page.mesh.material.opacity=1
+    metrics={...metrics,leftTracked:false,rightTracked:false,bendDegrees:null,
+      openingDegrees:null,signedBendDegrees:null,seamGap:null,seamGapRatio:null,
+      presentationState,alignmentStatus:'paused',suspendReason:reason}
+    onMetrics({...metrics})
+  }
+  const resumePresentation = ({requireConfirmation=true}={}) => {
+    resetPagePoses()
+    confirmationRequired=!!requireConfirmation
+    presentationState='reacquiring'
+    metrics={...metrics,leftTracked:false,rightTracked:false,bendDegrees:null,
+      openingDegrees:null,signedBendDegrees:null,seamGap:null,seamGapRatio:null,
+      presentationState,alignmentStatus:'waiting-targets'}
+    onMetrics({...metrics})
+  }
+  const confirmAlignment = () => {
+    if (presentationState!=='needs-confirmation' ||
+        !pages.left.active || !pages.right.active ||
+        !Number.isFinite(metrics.seamGapRatio) ||
+        metrics.seamGapRatio>maxReacquireGapRatio) return false
+    presentationState='ready'
+    confirmationRequired=false
+    pages.left.mesh.material.opacity=1
+    pages.right.mesh.material.opacity=1
+    metrics={...metrics,presentationState,alignmentStatus:'user-confirmed'}
+    onMetrics({...metrics})
+    return true
   }
   const pageByName = name => Object.values(pages).find(p=>p.name===name)
 
   // Takes an 8th Wall pose event or the event detail directly.
   const onPose = event => {
+    if (presentationState==='suspended') return false
     const data = event?.detail || event
     if (!data || typeof data.name!=='string' || !data.position || !data.rotation) return false
     const page = pageByName(data.name)
@@ -99,7 +157,9 @@ export function createPhysicalBookTracker({
       page.smoothRect = {...rect}
     }
     page.active = true
-    page.root.visible = true
+    if (presentationState==='reacquiring') reacquireSamples[page.side]++
+    page.root.visible = presentationState==='ready' ||
+      presentationState==='needs-confirmation'
     return true
   }
 
@@ -109,6 +169,10 @@ export function createPhysicalBookTracker({
     if (!page) return false
     page.active=false
     page.root.visible=false
+    if (presentationState==='reacquiring' || presentationState==='needs-confirmation') {
+      presentationState='reacquiring'
+      reacquireSamples[page.side]=0
+    }
     return true
   }
 
@@ -131,6 +195,8 @@ export function createPhysicalBookTracker({
     metrics={
       leftTracked:pages.left.active,rightTracked:pages.right.active,
       bendDegrees:null,signedBendDegrees:null,openingDegrees:null,seamGap:null,
+      seamGapRatio:null,presentationState,
+      alignmentStatus:presentationState==='suspended'?'paused':'waiting-targets',
     }
     if (pages.left.active && pages.right.active) {
       const leftPose={position:pages.left.smoothPosition,rotation:pages.left.smoothQuaternion}
@@ -140,8 +206,10 @@ export function createPhysicalBookTracker({
       const delta=subtract(b,a)
       const gap=length(delta)
       metrics.seamGap=gap
+      const minWidth=Math.min(pages.left.smoothRect.width,pages.right.smoothRect.width)
+      metrics.seamGapRatio=minWidth>0?gap/minWidth:null
       Object.assign(metrics,foldAngles(leftPose.rotation,rightPose.rotation))
-      const pageWidth=Math.min(pages.left.smoothRect.width,pages.right.smoothRect.width)
+      const pageWidth=minWidth
       const strength=Math.max(0,Math.min(1,seamCorrectionStrength))
       if(gap<=pageWidth*maxSeamGapRatio && strength>0){
         pages.left.root.position.addScaledVector(
@@ -151,6 +219,35 @@ export function createPhysicalBookTracker({
           new THREE.Vector3(delta.x,delta.y,delta.z),-strength/2
         )
       }
+    }
+    if (presentationState==='needs-confirmation' &&
+        (!pages.left.active || !pages.right.active ||
+          !Number.isFinite(metrics.seamGapRatio) ||
+          metrics.seamGapRatio>maxReacquireGapRatio)) {
+      presentationState='reacquiring'
+      reacquireSamples={left:0,right:0}
+    }
+    if (presentationState==='reacquiring') {
+      const bothFresh=pages.left.active && pages.right.active &&
+        reacquireSamples.left>=minReacquireSamplesPerPage &&
+        reacquireSamples.right>=minReacquireSamplesPerPage
+      if (bothFresh && Number.isFinite(metrics.seamGapRatio) &&
+          metrics.seamGapRatio<=maxReacquireGapRatio) {
+        presentationState=confirmationRequired?'needs-confirmation':'ready'
+      } else {
+        metrics.alignmentStatus=bothFresh?'spine-misaligned':'waiting-targets'
+      }
+    }
+    if (presentationState==='needs-confirmation') {
+      metrics.alignmentStatus='visual-confirmation-needed'
+    } else if (presentationState==='ready') {
+      metrics.alignmentStatus='geometry-accepted'
+    }
+    metrics.presentationState=presentationState
+    for (const page of Object.values(pages)) {
+      page.root.visible=page.active && (presentationState==='ready' ||
+        presentationState==='needs-confirmation')
+      page.mesh.material.opacity=presentationState==='needs-confirmation'?previewOpacity:1
     }
     onMetrics({...metrics})
     return {...metrics}
@@ -181,6 +278,7 @@ export function createPhysicalBookTracker({
     getMetrics:()=>({...metrics}),
     getPageObjects:()=>({left:pages.left.root,right:pages.right.root}),
     videoTexture:texture,
+    suspendPresentation,resumePresentation,confirmAlignment,
     dispose,
   }
 }
