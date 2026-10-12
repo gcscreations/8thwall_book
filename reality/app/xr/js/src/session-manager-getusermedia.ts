@@ -195,7 +195,8 @@ const SessionManagerGetUserMedia = (xrccPromise: Promise<XrccModule>) => {
           const facingMode = constraints.video.facingMode as string | string[]
           if (device.os === 'iOS' &&
               parseFloat(device.osVersion) >= 16.4 &&
-              !facingMode?.includes('user')) {
+              !facingMode?.includes('user') &&
+              !constraints.video.deviceId) {
             // Close the stream we just opened as we will re-open it.
             closeStream(stream)
             // Request devices so that we can determine which to re-open with.
@@ -223,6 +224,7 @@ const SessionManagerGetUserMedia = (xrccPromise: Promise<XrccModule>) => {
               delete constraints.video.deviceId
             }).catch((err) => {
               verboseLog('[XR] Failed to enumerate devices', err?.name, err?.message)
+              reject(err)
             })
             return
           }
@@ -234,6 +236,17 @@ const SessionManagerGetUserMedia = (xrccPromise: Promise<XrccModule>) => {
             return
           }
           verboseLog(`[XR] Couldn't open camera stream at ${getDimensionString(constraints)}`)
+
+          // An unavailable explicit/ultra-wide lens must not prevent normal AR.
+          // Retry the SAME resolution without optional lens preferences first.
+          if (cameraConfig.deviceId || cameraConfig.preferUltraWide) {
+            verboseLog('[XR] Preferred lens failed, retrying standard rear camera')
+            const fallbackConfig = {
+              ...cameraConfig, deviceId: undefined, preferUltraWide: false,
+            }
+            startCameraStream(loadId, fallbackConfig, tryIndex).then(resolve, reject)
+            return
+          }
 
           const nextIndex = tryIndex + 1
           if (!hasResolutionIndex(nextIndex)) {

@@ -100,3 +100,41 @@ npm test
 ```
 
 For best results, guide children to hold the entire book comfortably inside the frame, avoid glare, and move the phone back slightly rather than forcing ultrawide zoom. Use larger controls and no unexpected camera lens switching.
+
+## Engine-level wide-angle rear camera selection (custom engine build)
+
+The fork's **actual rear camera stream** is created in `reality/app/xr/js/src/session-manager-getusermedia.ts`. An application cannot change the physical focal length of the Redmi Note 13 5G's lens through JavaScript, and changing Three.js `camera.fov` **does not** increase the captured image. The new fork settings select a different physical camera **only if the browser exposes it**.
+
+If you build and load **this fork's custom XR8 engine** rather than the stock `@8thwall/engine@0.1.0` distribution, configure the lens *before starting tracking*:
+
+```js
+XR8.run({
+  canvas: document.querySelector('#camera-canvas'),
+  cameraConfig: {
+    direction: 'back',
+    preferUltraWide: true, // labeled rear ultra-wide only; falls back safely
+  },
+})
+```
+
+For a known **rear-camera device ID** already obtained from `navigator.mediaDevices.enumerateDevices()` and verified by preview:
+
+```js
+XR8.run({
+  canvas,
+  cameraConfig: {
+    direction: 'back',
+    deviceId: selectedRearCameraId,
+  },
+})
+```
+
+This option cannot discover hidden Android Camera2 physical camera IDs. If Chrome exposes only a logical rear camera with zoom minimum 1×, it cannot turn on the physical 0.6× camera by changing focal-length constants. On the Redmi Note 13 5G, the separate `camera-test.html` page reporting no wider lens means this preference will **fall back to standard view** unless Android exposes another lens under suitable permissions/browser versions.
+
+**Important build step:** Changing this TypeScript source **does not modify** your already downloaded npm `@8thwall/engine` or the v4 ZIP. A custom engine bundle must be built from this fork using its Bazel packaging toolchain, then copied into the demo's `vendor/8thwall-engine/dist/` directory and served in place of stock `xr.js`. The required build command from the fork's `packages/engine/tools/prepack.sh` is:
+
+```sh
+bazel build //reality/app/xr/js:bundle --config=wasmreleasesimd
+```
+
+The generated `bundle.zip` contains the engine JavaScript/chunks to deploy together. Until a custom engine build and device test succeed, do not claim ultra-wide camera capture in the AR view. Selecting a different lens may also change camera intrinsics: confirm image-target tracking, AR page-edge alignment and spine positioning on each phone.

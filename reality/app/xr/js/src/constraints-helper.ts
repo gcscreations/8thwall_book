@@ -6,6 +6,7 @@
 
 import {XrDeviceFactory} from './js-device'
 import {XrConfigFactory} from './config'
+import type {CameraConfig} from './types/pipeline'
 
 // Constraints for GetUserMedia
 type GumConstraints = Partial<{
@@ -201,9 +202,53 @@ const getPreferredDeviceId = (direction) => {
   })
 }
 
-const getCameraConstraints = (tryResolutionsIndex, {direction}) => (
-  Promise.resolve(getPreferredDeviceId(direction)).then((deviceId) => {
-    const videoConstraints = getResolutionConstraints(tryResolutionsIndex)
+
+const isAdvertisedUltraWideRear = (label: string) => (
+  /(?:ultra[\\s_-]*wide|0[.,][56]\\s*[x×])/i.test(label) &&
+  !/(?:front|selfie|facetime|user\\s+facing)/i.test(label)
+)
+
+// Physical lens focal length is fixed. This only chooses a device that the
+// browser *already advertises* as ultra-wide. Generic camera2 IDs and "back"
+// labels are not enough to identify which physical lens is wider.
+const getUltraWideRearDeviceId = () => {
+  if (!navigator.mediaDevices?.enumerateDevices ||
+      !navigator.mediaDevices.getSupportedConstraints?.().deviceId) {
+    return Promise.resolve(null)
+  }
+  return getLabelledDevices().then((devices) => {
+    const candidate = devices.find(device => (
+      device.kind === 'videoinput' &&
+      device.deviceId &&
+      isAdvertisedUltraWideRear(device.label || '')
+    ))
+    return candidate?.deviceId || null
+  })
+}
+
+const selectConfiguredCameraDeviceId = (config: CameraConfig) => {
+  const {FRONT, ANY} = XrConfigFactory().camera()
+  const direction = config.direction
+  if (direction === FRONT || direction === ANY) {
+    return getPreferredDeviceId(direction)
+  }
+  if (typeof config.deviceId === 'string' && config.deviceId.trim()) {
+    return Promise.resolve(config.deviceId.trim())
+  }
+  if (config.preferUltraWide) {
+    return getUltraWideRearDeviceId().then((id) => (
+      id || getPreferredDeviceId(direction)
+    ))
+  }
+  return getPreferredDeviceId(direction)
+}
+
+const getCameraConstraints = (tryResolutionsIndex, config: CameraConfig) => (
+  Promise.resolve(selectConfiguredCameraDeviceId(config)).then((deviceId) => {
+    const direction = config.direction
+    // Resolution presets are module singletons. Always copy them so changing a
+    // camera ID doesn't leak across retries, page reloads or XR8 sessions.
+    const videoConstraints = {...getResolutionConstraints(tryResolutionsIndex)}
 
     if (deviceId) {
       videoConstraints.deviceId = {exact: deviceId}
