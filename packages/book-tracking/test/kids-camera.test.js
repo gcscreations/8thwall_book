@@ -27,6 +27,17 @@ function mockTrack({capabilities={},initialConstraints={facingMode:'environment'
   return track
 }
 const stream=track=>({getVideoTracks:()=>[track]})
+function mockBookTracker() {
+  let state='ready'
+  const events=[]
+  return {
+    events,
+    suspendPresentation(reason){state='suspended';events.push(['pause',reason])},
+    resumePresentation(options){state='reacquiring';events.push(['resume',options])},
+    confirmAlignment(){state='ready';events.push(['confirm']);return true},
+    getMetrics(){return {presentationState:state}},
+  }
+}
 const attach=(controller,track)=>controller.bindStream(stream(track))
 
 test('Android Chrome: Kids Mode requests continuous focus while preserving camera constraints', async()=>{
@@ -53,7 +64,7 @@ test('iPhone Safari without focusMode or zoom: device-managed fallback, camera s
   assert.equal(controller.getState().ready,true)
   assert.equal(controller.getState().focusAvailable,false)
   assert.equal(controller.getState().message,'Using phone-managed autofocus')
-  assert.deepEqual(await controller.setZoom(0.7),{ok:false,reason:'Zoom locked to preserve AR alignment'})
+  assert.deepEqual(await controller.setZoom(0.7),{ok:false,reason:'Zoom is disabled until enabled by the application'})
   controller.dispose()
 })
 
@@ -70,19 +81,23 @@ test('normal mode restores original constraints without replacing the stream',as
   controller.dispose()
 })
 
-test('optional zoom only within actual range and only when pages are not tracked',async()=>{
-  let tracking=true
+test('guarded zoom while book is tracked suspends overlays and requires confirmation',async()=>{
+  const bookTracker=mockBookTracker()
   const track=mockTrack({capabilities:{focusMode:['continuous'],zoom:{min:.5,max:2,step:.1}}})
-  const controller=createKidsCameraController({allowZoom:true,isBookTracked:()=>tracking})
+  const controller=createKidsCameraController({allowZoom:true,bookTracker,waitForSettle:async()=>{}})
   attach(controller,track)
   await controller.whenIdle()
-  assert.equal((await controller.setZoom(.7)).ok,false)
-  assert.equal(track.calls.length,1)
-  tracking=false
   assert.equal((await controller.setZoom(.4)).ok,false)
-  assert.equal((await controller.setZoom(.7)).ok,true)
+  const outcome=await controller.setZoom(.7)
+  assert.equal(outcome.ok,true)
+  assert.equal(outcome.pendingAlignment,true)
   assert.equal(track.calls.at(-1).zoom,.7)
-  assert.equal(controller.getState().actualZoom,.7)
+  assert.deepEqual(bookTracker.events.at(-2),['pause','camera-zoom'])
+  assert.deepEqual(bookTracker.events.at(-1),['resume',{requireConfirmation:true}])
+  assert.equal((await controller.setMode('normal')).ok,false)
+  const reset=await controller.setZoom(1)
+  assert.equal(reset.ok,true)
+  assert.deepEqual(bookTracker.events.at(-1),['resume',{requireConfirmation:false}])
   controller.dispose()
 })
 
@@ -142,7 +157,7 @@ test('unsupported getCapabilities and missing applyConstraints cause no crash',a
 test('unsupported requested zoom is cleared when switching to a camera with a smaller range',async()=>{
   const one=mockTrack({capabilities:{zoom:{min:.5,max:3}},initialSettings:{zoom:1}})
   const two=mockTrack({capabilities:{zoom:{min:1,max:2}},initialSettings:{zoom:1}})
-  const controller=createKidsCameraController({allowZoom:true})
+  const controller=createKidsCameraController({allowZoom:true,bookTracker:mockBookTracker(),waitForSettle:async()=>{}})
   attach(controller,one)
   await controller.whenIdle()
   assert.equal((await controller.setZoom(.5)).ok,true)

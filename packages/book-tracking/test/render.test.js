@@ -85,3 +85,69 @@ test('right-page rotation yields a 90-degree physical fold',()=>{
   assert.ok(Math.abs(tracker.update(0).bendDegrees-90)<1e-5)
   tracker.dispose()
 })
+
+test('camera zoom hides overlays until both pages provide fresh poses and video is visually approved',()=>{
+  const book=createPhysicalBookTracker({THREE,scene:new Group(),video:{setAttribute:()=>{}},
+    smoothingMs:0,seamCorrectionStrength:0})
+  const x=1024/1152/2
+  book.onPose(pose('page-left',-x));book.onPose(pose('page-right',x))
+  assert.equal(book.update(0).presentationState,'ready')
+  book.suspendPresentation('camera-zoom')
+  assert.equal(book.onPose(pose('page-left',-x)),false)
+  assert.equal(book.getPageObjects().left.visible,false)
+  book.resumePresentation({requireConfirmation:true})
+  for(let i=0;i<2;i++){
+    book.onPose(pose('page-left',-x));book.onPose(pose('page-right',x))
+    assert.equal(book.update(16+i*16).presentationState,'reacquiring')
+  }
+  book.onPose(pose('page-left',-x));book.onPose(pose('page-right',x))
+  const m=book.update(60)
+  assert.equal(m.presentationState,'needs-confirmation')
+  assert.equal(m.alignmentStatus,'visual-confirmation-needed')
+  assert.equal(book.getPageObjects().left.visible,true)
+  assert.equal(book.getPageObjects().left.children[0].material.opacity,.55)
+  assert.equal(book.confirmAlignment(),true)
+  assert.equal(book.getPageObjects().left.children[0].material.opacity,1)
+  assert.equal(book.getMetrics().presentationState,'ready')
+  book.dispose()
+})
+test('an inconsistent center spine blocks preview and user approval',()=>{
+  const book=createPhysicalBookTracker({THREE,scene:new Group(),video:{setAttribute:()=>{}},smoothingMs:0})
+  book.suspendPresentation()
+  book.resumePresentation({requireConfirmation:true})
+  for(let i=0;i<3;i++){
+    book.onPose(pose('page-left',-.5));book.onPose(pose('page-right',3.5))
+  }
+  const m=book.update(0)
+  assert.equal(m.presentationState,'reacquiring')
+  assert.equal(m.alignmentStatus,'spine-misaligned')
+  assert.equal(book.confirmAlignment(),false)
+  assert.equal(book.getPageObjects().right.visible,false)
+  book.dispose()
+})
+test('losing a page while previewing requires reacquisition again',()=>{
+  const book=createPhysicalBookTracker({THREE,scene:new Group(),video:{setAttribute:()=>{}},smoothingMs:0})
+  const x=1024/1152/2
+  book.suspendPresentation()
+  book.resumePresentation({requireConfirmation:true})
+  for(let i=0;i<3;i++){
+    book.onPose(pose('page-left',-x));book.onPose(pose('page-right',x))
+  }
+  assert.equal(book.update(0).presentationState,'needs-confirmation')
+  book.onLost({name:'page-left'})
+  assert.equal(book.update(16).presentationState,'reacquiring')
+  assert.equal(book.confirmAlignment(),false)
+  book.dispose()
+})
+test('restoring original zoom recovers without visual confirmation',()=>{
+  const book=createPhysicalBookTracker({THREE,scene:new Group(),video:{setAttribute:()=>{}},smoothingMs:0})
+  const x=1024/1152/2
+  book.suspendPresentation()
+  book.resumePresentation({requireConfirmation:false})
+  for(let i=0;i<3;i++){
+    book.onPose(pose('page-left',-x));book.onPose(pose('page-right',x))
+  }
+  assert.equal(book.update(0).presentationState,'ready')
+  assert.equal(book.getPageObjects().left.visible,true)
+  book.dispose()
+})
