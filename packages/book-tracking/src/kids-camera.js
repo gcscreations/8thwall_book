@@ -57,7 +57,8 @@ export function createKidsCameraController({
       focusState,
       actualFocus: settings.focusMode ?? null,
       zoomAvailable: ready() && zoomAvailable(),
-      zoomEnabled: ready() && videoReady && allowZoom && zoomAvailable() && !!safeZoomAvailable(),
+      zoomEnabled: ready() && videoReady && allowZoom && zoomAvailable() &&
+        Number.isFinite(baselineZoom) && Number.isFinite(settings.zoom) && !!safeZoomAvailable(),
       zoomBusy,
       baselineZoom,
       alignmentState: safeRead(() => bookTracker?.getMetrics()?.presentationState, null),

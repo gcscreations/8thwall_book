@@ -53,7 +53,9 @@ export async function applyGuardedZoom({
       if (!stillCurrent()) return {ok:false,reason:'Camera changed during rollback'}
       await wait(settleMs)
       if (!stillCurrent()) return {ok:false,reason:'Camera changed during rollback'}
-      bookTracker.resumePresentation({requireConfirmation:false})
+      bookTracker.resumePresentation({
+        requireConfirmation:!near(previousZoom,baselineZoom,tolerance)
+      })
       return {ok:false,rolledBack:true,reason:err?.message||'Zoom was rejected'}
     } catch {
       return {ok:false,restartRequired:true,

@@ -74,3 +74,10 @@ test('a missing book tracker or missing baseline refuses to touch camera',async(
   assert.equal((await applyGuardedZoom({...options(t,bookTracker()),previousZoom:null})).ok,false)
   assert.equal(t.calls.length,0)
 })
+
+test('rollback to a previously confirmed non-default zoom needs a new visual check',async()=>{
+  const t=makeTrack({zoom:1.4,failAt:[1]}),b=bookTracker()
+  const r=await applyGuardedZoom({...options(t,b),zoom:1.8,previousZoom:1.4,baselineZoom:1})
+  assert.equal(r.rolledBack,true)
+  assert.deepEqual(b.events.at(-1),['resume',{requireConfirmation:true}])
+})
