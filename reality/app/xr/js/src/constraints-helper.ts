@@ -204,8 +204,8 @@ const getPreferredDeviceId = (direction) => {
 
 
 const isAdvertisedUltraWideRear = (label: string) => (
-  /(?:ultra[\\s_-]*wide|0[.,][56]\\s*[x×])/i.test(label) &&
-  !/(?:front|selfie|facetime|user\\s+facing)/i.test(label)
+  /(?:ultra[\s_-]*wide|0[.,][56]\s*[x×])/i.test(label) &&
+  !/(?:front|selfie|facetime|user\s+facing)/i.test(label)
 )
 
 // Physical lens focal length is fixed. This only chooses a device that the
