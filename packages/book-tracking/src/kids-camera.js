@@ -1,3 +1,5 @@
+import {applyGuardedZoom} from './safe-zoom.js'
+
 // Optional child-friendly camera controls for the browser stream owned by 8th Wall.
 // Does not replace XR8's camera or modify the rendering projection.
 
@@ -14,7 +16,9 @@ const copyConstraints = c => ({
 export function createKidsCameraController({
   initialMode = 'kids',
   allowZoom = false,
-  isBookTracked = () => false,
+  bookTracker = null,
+  settleMs = 450,
+  waitForSettle,
   onState = () => {},
 } = {}) {
   if (!VALID_MODES.has(initialMode)) throw new Error('Mode must be kids or normal')
@@ -28,6 +32,8 @@ export function createKidsCameraController({
   let applied = false
   let videoReady = false
   let wantedZoom = null
+  let baselineZoom = null
+  let zoomBusy = false
   let focusState = 'device-managed'
   let zoomState = 'unchanged'
   let message = 'Waiting for rear camera'
@@ -37,6 +43,10 @@ export function createKidsCameraController({
   const focusAvailable = () => Array.isArray(capabilities.focusMode) &&
     capabilities.focusMode.includes('continuous')
   const zoomAvailable = () => isRange(capabilities.zoom)
+  const safeZoomAvailable = () => bookTracker &&
+    typeof bookTracker.suspendPresentation === 'function' &&
+    typeof bookTracker.resumePresentation === 'function' &&
+    typeof bookTracker.confirmAlignment === 'function'
   const ready = () => !!track && track.readyState !== 'ended'
   const getState = () => {
     const settings = ready() ? safeRead(() => track.getSettings(), {}) : {}
@@ -47,7 +57,10 @@ export function createKidsCameraController({
       focusState,
       actualFocus: settings.focusMode ?? null,
       zoomAvailable: ready() && zoomAvailable(),
-      zoomEnabled: ready() && allowZoom && zoomAvailable(),
+      zoomEnabled: ready() && videoReady && allowZoom && zoomAvailable() && !!safeZoomAvailable(),
+      zoomBusy,
+      baselineZoom,
+      alignmentState: safeRead(() => bookTracker?.getMetrics()?.presentationState, null),
       zoomMin: zoomAvailable() ? capabilities.zoom.min : null,
       zoomMax: zoomAvailable() ? capabilities.zoom.max : null,
       zoomStep: Number.isFinite(capabilities.zoom?.step) && capabilities.zoom.step > 0
@@ -74,11 +87,14 @@ export function createKidsCameraController({
     track = null
     capabilities = {}
     originalConstraints = {}
+    wantedZoom = null
+    baselineZoom = null
     applied = false
     videoReady = false
     focusState = 'device-managed'
     zoomState = 'unchanged'
     message = 'Waiting for rear camera'
+    if (safeZoomAvailable()) bookTracker.suspendPresentation('camera-restart')
     notify()
   }
   function onEnded() {
@@ -96,9 +112,14 @@ export function createKidsCameraController({
       if (disposed || token !== generation || currentRevision !== revision ||
           !source || source.readyState === 'ended') return
       const continuous = requestedMode === 'kids' && focusAvailable()
-      const useZoom = requestedMode === 'kids' && allowZoom && zoom !== null && zoomAvailable() &&
-        zoom >= capabilities.zoom.min && zoom <= capabilities.zoom.max && !isBookTracked()
-      if (!continuous && !useZoom && !applied) {
+      // Zoom is never reapplied as a side effect of autofocus/mode changes.
+      if (requestedMode === 'kids' && Number.isFinite(zoom) &&
+          Number.isFinite(baselineZoom) && Math.abs(zoom - baselineZoom) > 0.05) {
+        message = 'Kids Mode zoom active; focus settings preserved'
+        notify()
+        return
+      }
+      if (!continuous && !applied) {
         message = requestedMode === 'kids' ? 'Using phone-managed autofocus' : 'Standard camera mode'
         focusState = 'device-managed'
         notify()
@@ -112,7 +133,6 @@ export function createKidsCameraController({
       }
       const candidate = {...base}
       if (continuous) candidate.focusMode = 'continuous'
-      if (useZoom) candidate.zoom = zoom
       try {
         await source.applyConstraints(candidate)
         if (disposed || token !== generation || currentRevision !== revision) return
@@ -121,27 +141,13 @@ export function createKidsCameraController({
         focusState = continuous
           ? (settings.focusMode === 'continuous' ? 'confirmed' : 'requested-unverified')
           : 'device-managed'
-        zoomState = useZoom
-          ? (Number.isFinite(settings.zoom) && Math.abs(settings.zoom - zoom) < 0.05
-            ? 'confirmed' : 'requested-unverified')
-          : 'unchanged'
+        zoomState = wantedZoom !== null ? zoomState : 'unchanged'
         message = requestedMode === 'kids' ? 'Kids Mode: keep both pages visible' : 'Standard camera mode'
       } catch (err) {
         if (disposed || token !== generation || currentRevision !== revision) return
         focusState = 'device-managed'
-        zoomState = useZoom ? 'failed' : 'unchanged'
+        zoomState = wantedZoom !== null ? zoomState : 'unchanged'
         message = 'Camera did not accept the requested setting; standard camera still works'
-        // If a joint focus + zoom request failed, still try continuous focus alone.
-        if (continuous && useZoom) {
-          try {
-            await source.applyConstraints({...base, focusMode: 'continuous'})
-            if (disposed || token !== generation || currentRevision !== revision) return
-            applied = true
-            const settings = safeRead(() => source.getSettings(), {})
-            focusState = settings.focusMode === 'continuous' ? 'confirmed' : 'requested-unverified'
-            message = 'Zoom unavailable; continuous focus requested'
-          } catch { /* Keep the original stream unchanged. */ }
-        }
       }
       notify()
     })
@@ -163,9 +169,9 @@ export function createKidsCameraController({
     track = next
     generation++
     capabilities = safeRead(() => next.getCapabilities(), {}) || {}
-    if (wantedZoom !== null && (!zoomAvailable() || wantedZoom < capabilities.zoom.min ||
-        wantedZoom > capabilities.zoom.max)) wantedZoom = null
     originalConstraints = copyConstraints(safeRead(() => next.getConstraints(), {}))
+    baselineZoom = safeRead(() => next.getSettings()?.zoom, null)
+    if (!Number.isFinite(baselineZoom)) baselineZoom = null
     if (next.addEventListener) next.addEventListener('ended', onEnded)
     videoReady = !waitForVideo
     message = waitForVideo ? 'Waiting for camera preview' : 'Camera connected'
@@ -177,35 +183,97 @@ export function createKidsCameraController({
   const setMode = next => {
     if (!VALID_MODES.has(next)) return Promise.reject(new Error('Mode must be kids or normal'))
     if (disposed) return Promise.reject(new Error('Controller disposed'))
+    if (zoomBusy) return Promise.resolve({ok:false,reason:'Wait for zoom to finish'})
+    const current = safeRead(() => track?.getSettings()?.zoom, null)
+    if (next === 'normal' && Number.isFinite(baselineZoom) &&
+        Number.isFinite(current) && Math.abs(current - baselineZoom) > 0.05) {
+      message = 'Reset camera zoom before switching to Normal Mode'
+      notify()
+      return Promise.resolve({ok:false,reason:message})
+    }
     mode = next
     notify()
     return ready() ? applyMode() : Promise.resolve(getState())
   }
-  const setZoom = value => {
-    if (disposed) return Promise.reject(new Error('Controller disposed'))
-    if (!allowZoom) return Promise.resolve({ok:false,reason:'Zoom locked to preserve AR alignment'})
-    if (mode !== 'kids') return Promise.resolve({ok:false,reason:'Switch to Kids Mode before adjusting zoom'})
-    if (!ready() || !zoomAvailable()) {
-      return Promise.resolve({ok:false,reason:'Camera zoom is not supported on this device'})
+  const setZoom = async value => {
+    if (disposed) return {ok:false,reason:'Controller disposed'}
+    if (!allowZoom) return {ok:false,reason:'Zoom is disabled until enabled by the application'}
+    if (mode !== 'kids') return {ok:false,reason:'Switch to Kids Mode to adjust zoom'}
+    if (!ready() || !videoReady || !zoomAvailable()) {
+      return {ok:false,reason:'Camera zoom is not available on this device'}
     }
-    const n = Number(value)
-    if (!Number.isFinite(n) || n < capabilities.zoom.min || n > capabilities.zoom.max) {
-      return Promise.resolve({ok:false,reason:'Zoom outside camera-supported range'})
+    if (!safeZoomAvailable()) {
+      return {ok:false,reason:'Connect the book tracker to enable guarded zoom'}
     }
-    if (isBookTracked()) return Promise.resolve({ok:false,reason:'Move the book out of view before adjusting zoom'})
-    wantedZoom = n
+    if (zoomBusy) return {ok:false,reason:'Another zoom change is in progress'}
+    const n=Number(value)
+    if (!Number.isFinite(n) || n<capabilities.zoom.min || n>capabilities.zoom.max) {
+      return {ok:false,reason:'Zoom is outside the camera-supported range'}
+    }
+    const source=track
+    const epoch=generation
+    const previousZoom=safeRead(()=>source.getSettings()?.zoom,null)
+    if (!Number.isFinite(previousZoom) || !Number.isFinite(baselineZoom)) {
+      return {ok:false,reason:'Camera zoom cannot be verified; use standard mode'}
+    }
+    zoomBusy=true
+    message='Updating camera zoom; AR pages temporarily hidden'
     notify()
-    return applyMode().then(state => ({
-      ok: state.zoomState === 'confirmed',
-      ...(state.zoomState !== 'confirmed' ? {reason: 'Zoom could not be verified on this camera'} : {}),
-      state,
-    }))
+    try {
+      // Serializes the zoom transaction after any outstanding focus request.
+      await queue.catch(()=>{})
+      if (epoch!==generation || source!==track || disposed) {
+        return {ok:false,reason:'Camera stream changed before zoom'}
+      }
+      const result=await applyGuardedZoom({
+        track:source,zoom:n,previousZoom,baselineZoom,
+        bookTracker,settleMs,wait:waitForSettle,
+        step:capabilities.zoom.step,
+        isCurrent:()=>!disposed && epoch===generation && track===source,
+      })
+      if (epoch!==generation || source!==track || disposed) {
+        return {ok:false,reason:'Camera stream changed during zoom'}
+      }
+      if (result.ok) {
+        wantedZoom=n
+        zoomState='confirmed'
+        message=result.pendingAlignment
+          ? 'Find both pages, then confirm the video edges align'
+          : 'Zoom reset; reacquiring both pages'
+      } else {
+        zoomState=result.restartRequired?'restart-required':'failed'
+        message=result.reason
+      }
+      notify()
+      return {...result,state:getState()}
+    } catch(err) {
+      zoomState='failed'
+      message=err?.message || 'Could not change zoom'
+      notify()
+      return {ok:false,reason:message}
+    } finally {
+      zoomBusy=false
+      notify()
+    }
+  }
+  const confirmAlignment=()=>{
+    const ok=!!safeZoomAvailable() && bookTracker.confirmAlignment()
+    message=ok?'Video alignment confirmed for this session':
+      'Keep both pages visible until the alignment preview is available'
+    notify()
+    return ok
   }
   const pipelineModule = () => ({
     name: 'book-kids-camera',
     onCameraStatusChange({status,stream,video}) {
       if (status === 'hasStream') bindStream(stream, {waitForVideo:true})
-      else if (status === 'hasVideo') bindStream(video?.srcObject)
+      else if (status === 'hasVideo') {
+        bindStream(video?.srcObject)
+        if (safeZoomAvailable() && !zoomBusy &&
+            bookTracker.getMetrics()?.presentationState === 'suspended') {
+          bookTracker.resumePresentation({requireConfirmation:false})
+        }
+      }
       else if (status === 'requesting' || status === 'failed') release()
     },
     onSessionDetach: release,
@@ -223,7 +291,7 @@ export function createKidsCameraController({
     subscribers.clear()
   }
   return {
-    getState, setMode, setZoom, bindStream, pipelineModule, subscribe,
+    getState, setMode, setZoom, confirmAlignment, bindStream, pipelineModule, subscribe,
     whenIdle: () => queue,
     dispose,
   }
