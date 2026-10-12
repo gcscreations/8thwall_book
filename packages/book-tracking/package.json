@@ -7,7 +7,10 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.js",
-    "./math": "./src/math.js"
+    "./math": "./src/math.js",
+    "./kids-camera": "./src/kids-camera.js",
+    "./kids-camera-ui": "./src/kids-camera-ui.js",
+    "./kids-camera.css": "./src/kids-camera.css"
   },
   "scripts": {
     "test": "node --test"

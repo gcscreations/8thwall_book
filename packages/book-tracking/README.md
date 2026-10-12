@@ -72,3 +72,9 @@ Run `cd packages/book-tracking && npm test` (Node 18+). Tests cover fold angles,
 - Only upright crop metadata is currently supported.
 
 See the full local demo in the separately distributed ZIP if you need printable sample artwork and an MP4. Those binary assets are not included in the public GitHub feature branch.
+
+## Kids Mode camera support (Android and iPhone)
+
+Add child-friendly **Kids Mode** controls for the camera stream already opened by 8th Wall. The extension requests continuous autofocus only on cameras that advertise support, includes large touch controls and two-page framing prompts, and safely falls back to phone-managed autofocus. Camera zoom is opt-in and off by default to avoid AR projection mismatch.
+
+See [KIDS_MODE.md](./KIDS_MODE.md) for complete integration examples, Safari/Chrome limitations, and test procedures. The core book tracker is unchanged; import `createKidsCameraController` and `mountKidsCameraControls` from this package and include `src/kids-camera.css` in your app.

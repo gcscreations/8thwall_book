@@ -1,3 +1,6 @@
+export {createKidsCameraController} from './kids-camera.js'
+export {mountKidsCameraControls} from './kids-camera-ui.js'
+
 import {foldAngles,fullPageGeometry,spinePoint,length,subtract} from './math.js'
 export {foldAngles,fullPageGeometry,spinePoint,rotateVector} from './math.js'
 
