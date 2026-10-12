@@ -1,0 +1,19 @@
+{
+  "name": "@gcscreations/book-tracking",
+  "version": "0.1.0",
+  "description": "Two-target physical AR book tracking with one video texture",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.js",
+    "./math": "./src/math.js",
+    "./kids-camera": "./src/kids-camera.js",
+    "./kids-camera-ui": "./src/kids-camera-ui.js",
+    "./kids-camera.css": "./src/kids-camera.css",
+    "./safe-zoom": "./src/safe-zoom.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -74,6 +74,12 @@ export type PipelineState = {
 
 export type CameraConfig = {
   direction: CameraDirection
+  // Select a camera listed by navigator.mediaDevices.enumerateDevices().
+  // Browser camera access remains subject to platform support and permissions.
+  deviceId?: string
+  // Choose a rear/ultra-wide lens only if its device label is discoverable.
+  // Falls back to the default rear camera; does not change optical focal length.
+  preferUltraWide?: boolean
 }
 
 export type DefaultEnvironmentConfiguration = {

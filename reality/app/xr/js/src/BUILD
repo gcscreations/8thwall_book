@@ -112,6 +112,7 @@ js_library(
     deps = [
         "//reality/app/xr/js/src:config",
         "//reality/app/xr/js/src:js-device",
+        "//reality/app/xr/js/src/types:pipeline",
     ],
 )
 

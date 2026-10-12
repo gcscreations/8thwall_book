@@ -1,0 +1,28 @@
+name: Book Tracking Unit Tests
+
+on:
+  pull_request:
+    paths:
+      - 'packages/book-tracking/**'
+      - '.github/workflows/book-tracking-tests.yml'
+  push:
+    branches:
+      - feature/physical-book-tracking
+    paths:
+      - 'packages/book-tracking/**'
+      - '.github/workflows/book-tracking-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run physical book tracking tests
+        working-directory: packages/book-tracking
+        run: npm test
