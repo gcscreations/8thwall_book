@@ -1,0 +1,15 @@
+{
+  "name": "@gcscreations/book-tracking",
+  "version": "0.1.0",
+  "description": "Two-target physical AR book tracking with one video texture",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.js",
+    "./math": "./src/math.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
