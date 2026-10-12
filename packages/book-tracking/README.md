@@ -78,3 +78,8 @@ See the full local demo in the separately distributed ZIP if you need printable 
 Add child-friendly **Kids Mode** controls for the camera stream already opened by 8th Wall. The extension requests continuous autofocus only on cameras that advertise support, includes large touch controls and two-page framing prompts, and safely falls back to phone-managed autofocus. Camera zoom is opt-in and off by default to avoid AR projection mismatch.
 
 See [KIDS_MODE.md](./KIDS_MODE.md) for complete integration examples, Safari/Chrome limitations, and test procedures. The core book tracker is unchanged; import `createKidsCameraController` and `mountKidsCameraControls` from this package and include `src/kids-camera.css` in your app.
+
+
+### Guarded experimental zoom
+
+Kids Mode now offers a guarded zoom transaction for Android and iPhone browsers that expose `MediaStreamTrack` zoom capabilities. It hides AR overlays, applies and verifies zoom (or attempts rollback), requires **fresh poses from both pages** and checks the spine gap, then shows a semi-transparent preview for **manual confirmation**. The physical XR8 camera pipeline itself continues running. See [KIDS_MODE.md](./KIDS_MODE.md) for the new `allowZoom: true, bookTracker` opt-in and device-test checklist. Never assume that browser zoom automatically recalibrates the AR projection.

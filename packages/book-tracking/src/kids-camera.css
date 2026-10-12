@@ -26,3 +26,20 @@
 .book-camera-zoom input { display: block; width: 100%; height: 40px; touch-action: manipulation; }
 .book-camera-zoom p { font-size: 13px; color: #cbd5e1; }
 .book-camera-guide { font-weight: 600; }
+
+.book-camera-reset, .book-camera-confirm {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  border-radius: 12px;
+  border: 2px solid #e2e8f0;
+  margin-top: 10px;
+  font-size: 17px;
+  font-weight: 700;
+  background: #0f766e;
+  color: white;
+  touch-action: manipulation;
+}
+.book-camera-reset[hidden], .book-camera-verify[hidden] { display: none; }
+.book-camera-reset:disabled, .book-camera-confirm:disabled { opacity: 0.55; }
+.book-camera-verify { margin-top: 12px; padding: 12px; border: 2px dashed #fbbf24; border-radius: 12px; }

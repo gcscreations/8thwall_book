@@ -18,7 +18,12 @@ export function mountKidsCameraControls({controller, container, documentRef = do
       <label>Zoom <output>1.0x</output>
         <input type="range" aria-label="Camera zoom" />
       </label>
-      <p>Changing zoom can affect AR alignment. Set it before scanning.</p>
+      <p>Experimental zoom: the video hides during changes. Recheck both page edges.</p>
+      <button type="button" class="book-camera-reset" hidden>Reset zoom</button>
+    </div>
+    <div class="book-camera-verify" hidden>
+      <p>Check both video halves against the physical page edges and center spine.</p>
+      <button type="button" class="book-camera-confirm">Looks aligned</button>
     </div>
     <p class="book-camera-guide" aria-live="polite">Point the rear camera at the open book.</p>`
   const buttons = Array.from(root.querySelectorAll('[data-mode]'))
@@ -27,12 +32,16 @@ export function mountKidsCameraControls({controller, container, documentRef = do
   const zoomBox = root.querySelector('.book-camera-zoom')
   const zoomSlider = root.querySelector('[type="range"]')
   const zoomOutput = root.querySelector('output')
+  const resetButton = root.querySelector('.book-camera-reset')
+  const verifyBox = root.querySelector('.book-camera-verify')
+  const confirmButton = root.querySelector('.book-camera-confirm')
   const guide = root.querySelector('.book-camera-guide')
   let currentlyTracking = false
   const render = state => {
     buttons.forEach(b => {
       const selected = b.dataset.mode === state.mode
       b.setAttribute('aria-pressed', String(selected))
+      b.disabled = !!state.zoomBusy
     })
     feedback.textContent = state.message
     focus.textContent = state.focusAvailable
@@ -46,19 +55,43 @@ export function mountKidsCameraControls({controller, container, documentRef = do
       zoomSlider.max = state.zoomMax
       zoomSlider.step = state.zoomStep
       zoomSlider.value = state.requestedZoom ?? state.actualZoom ?? 1
-      zoomSlider.disabled = currentlyTracking || state.mode !== 'kids'
+      zoomSlider.disabled = !!state.zoomBusy || state.mode !== 'kids'
       zoomOutput.textContent = `${Number(zoomSlider.value).toFixed(1)}x`
+      resetButton.hidden = !Number.isFinite(state.baselineZoom) ||
+        !Number.isFinite(state.actualZoom) ||
+        Math.abs(state.baselineZoom - state.actualZoom) < 0.05
+      resetButton.disabled = !!state.zoomBusy || state.mode !== 'kids'
     }
+    verifyBox.hidden = state.alignmentState !== 'needs-confirmation'
+    confirmButton.disabled = !!state.zoomBusy
   }
   const onMode = event => { void controller.setMode(event.currentTarget.dataset.mode) }
   buttons.forEach(b => b.addEventListener('click', onMode))
   const onZoom = () => { void controller.setZoom(zoomSlider.value).then(() => render(controller.getState())) }
   zoomSlider.addEventListener('change', onZoom)
+  const onReset = () => {
+    const base = controller.getState().baselineZoom
+    if (Number.isFinite(base)) void controller.setZoom(base)
+  }
+  const onConfirm = () => {
+    controller.confirmAlignment()
+    render(controller.getState())
+  }
+  resetButton.addEventListener('click', onReset)
+  confirmButton.addEventListener('click', onConfirm)
   mount.appendChild(root)
   const unsubscribe = controller.subscribe(render)
   const updateTracking = metrics => {
     currentlyTracking = !!(metrics?.leftTracked || metrics?.rightTracked)
-    if (metrics?.leftTracked && metrics?.rightTracked) guide.textContent = 'Great! Keep both pages visible.'
+    if (metrics?.presentationState === 'suspended') {
+      guide.textContent = 'Changing the camera; video is temporarily hidden.'
+    } else if (metrics?.presentationState === 'reacquiring') {
+      guide.textContent = metrics?.alignmentStatus === 'spine-misaligned'
+        ? 'Center spine does not align; hold the book open and move the phone back.'
+        : 'Move the book slightly so both pages can be tracked again.'
+    } else if (metrics?.presentationState === 'needs-confirmation') {
+      guide.textContent = 'Check both page edges and the center spine, then tap Looks aligned.'
+    } else if (metrics?.leftTracked && metrics?.rightTracked) guide.textContent = 'Great! Keep both pages visible.'
     else if (currentlyTracking) guide.textContent = 'Show both pages to follow the real fold.'
     else guide.textContent = 'Hold the phone steady, with the whole open book inside the frame.'
     render(controller.getState())
@@ -67,6 +100,8 @@ export function mountKidsCameraControls({controller, container, documentRef = do
     unsubscribe()
     buttons.forEach(b => b.removeEventListener('click', onMode))
     zoomSlider.removeEventListener('change', onZoom)
+    resetButton.removeEventListener('click', onReset)
+    confirmButton.removeEventListener('click', onConfirm)
     root.remove()
   }
   return {element: root, updateTracking, destroy}

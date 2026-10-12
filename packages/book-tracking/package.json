@@ -10,7 +10,8 @@
     "./math": "./src/math.js",
     "./kids-camera": "./src/kids-camera.js",
     "./kids-camera-ui": "./src/kids-camera-ui.js",
-    "./kids-camera.css": "./src/kids-camera.css"
+    "./kids-camera.css": "./src/kids-camera.css",
+    "./safe-zoom": "./src/safe-zoom.js"
   },
   "scripts": {
     "test": "node --test"
